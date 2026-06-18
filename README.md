@@ -76,8 +76,15 @@ boot), and the console:
 | Service  | URL                              | Notes                          |
 |----------|----------------------------------|--------------------------------|
 | Console  | http://localhost:5173            | the web UI                     |
+| Console (TLS) | https://localhost:5174      | self-signed; needed for the live mic |
 | API      | http://localhost:8000            | `/healthz`, `/readyz`, `/metrics` |
 | GPU      | internal only (`gpu:8001`)       | warm models                    |
+
+The browser microphone API (`getUserMedia`) only works in a **secure context**
+— HTTPS or `localhost`. Use the HTTPS console URL for the live-mic feature (the
+frontend ships a self-signed cert; accept the one-time browser warning, or drop
+a real cert/key at `/etc/nginx/certs` to remove it). File upload and the rest
+work over plain HTTP.
 
 ### Verify it's up
 
