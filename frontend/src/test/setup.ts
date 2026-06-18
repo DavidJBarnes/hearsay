@@ -15,3 +15,7 @@ if (!('createObjectURL' in URL)) {
   URL.createObjectURL = () => 'blob:mock';
 }
 URL.createObjectURL = vi.fn(() => 'blob:mock');
+
+// jsdom does not implement HTMLMediaElement.play(); stub it so autoplay-on-
+// generate works in tests and returns a promise like real browsers.
+window.HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);

@@ -27,17 +27,20 @@ describe('TtsPlayground', () => {
     await waitFor(() => expect(screen.getByRole('option', { name: 'MyClone' })).toBeInTheDocument());
   });
 
-  it('generates audio and shows a player', async () => {
+  it('generates audio, shows a player, and auto-plays it', async () => {
     render(<TtsPlayground />);
-    await userEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Speak' }));
     await waitFor(() => expect(screen.getByTestId('audio-player')).toBeInTheDocument());
     expect(synthesize).toHaveBeenCalledOnce();
+    await waitFor(() =>
+      expect(window.HTMLMediaElement.prototype.play).toHaveBeenCalled(),
+    );
   });
 
   it('shows an error when synthesis fails', async () => {
     synthesize.mockRejectedValueOnce(new Error('boom'));
     render(<TtsPlayground />);
-    await userEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Speak' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boom'));
   });
 

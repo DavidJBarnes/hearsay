@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { client } from '../api/client';
 import type { Voice } from '../api/types';
 
@@ -15,6 +15,7 @@ export function TtsPlayground() {
   const [busy, setBusy] = useState(false);
   const [streamBytes, setStreamBytes] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     client
@@ -22,6 +23,14 @@ export function TtsPlayground() {
       .then(setVoices)
       .catch(() => setVoices([]));
   }, []);
+
+  // Speak as soon as a new clip is ready (the button click is the user gesture).
+  // Browsers may still block autoplay; the visible controls remain as a fallback.
+  useEffect(() => {
+    if (audioUrl && audioRef.current) {
+      audioRef.current.play()?.catch(() => undefined);
+    }
+  }, [audioUrl]);
 
   async function generate() {
     setBusy(true);
@@ -120,7 +129,7 @@ export function TtsPlayground() {
       </div>
       <div className="row">
         <button disabled={busy} onClick={generate}>
-          Generate
+          {busy ? 'Speaking…' : 'Speak'}
         </button>
         <button disabled={busy} onClick={streamGenerate}>
           Stream
@@ -128,7 +137,9 @@ export function TtsPlayground() {
       </div>
       {streamBytes !== null && <p className="muted">Streamed {streamBytes} bytes</p>}
       {error && <p className="error" role="alert">{error}</p>}
-      {audioUrl && <audio data-testid="audio-player" controls src={audioUrl} />}
+      {audioUrl && (
+        <audio ref={audioRef} data-testid="audio-player" autoPlay controls src={audioUrl} />
+      )}
     </section>
   );
 }
