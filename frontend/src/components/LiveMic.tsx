@@ -20,7 +20,15 @@ export function LiveMic({ onMessage }: Props) {
     setError(null);
     try {
       const media = navigator.mediaDevices;
-      if (!media?.getUserMedia) throw new Error('microphone not available');
+      if (!media?.getUserMedia) {
+        throw new Error(
+          window.isSecureContext
+            ? 'Microphone not available in this browser.'
+            : 'Live mic needs a secure context. Open Hearsay over HTTPS or via ' +
+              'localhost (e.g. an SSH tunnel) to use the microphone. File upload ' +
+              'transcription works over plain HTTP.',
+        );
+      }
       const stream = await media.getUserMedia({ audio: true });
       streamRef.current = stream;
       const ctx = new AudioContext();

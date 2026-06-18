@@ -59,12 +59,26 @@ describe('LiveMic', () => {
     vi.unstubAllGlobals();
   });
 
-  it('shows an error when the microphone is unavailable', async () => {
+  it('reports an unavailable mic in a secure context', async () => {
     vi.stubGlobal('navigator', { mediaDevices: undefined });
+    vi.stubGlobal('isSecureContext', true);
     render(<LiveMic onMessage={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: /Start recording/ }));
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent('microphone not available'),
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Microphone not available in this browser',
+      ),
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it('explains the secure-context requirement over plain HTTP', async () => {
+    vi.stubGlobal('navigator', { mediaDevices: undefined });
+    vi.stubGlobal('isSecureContext', false);
+    render(<LiveMic onMessage={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /Start recording/ }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Live mic needs a secure context'),
     );
     vi.unstubAllGlobals();
   });
