@@ -1,0 +1,79 @@
+# Hearsay — fully self-hosted TTS + STT platform.
+#
+# `docker compose up` starts Postgres, the GPU daemon (warm models), the API
+# gateway (auto-applies migrations on boot), and the React console.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hearsay}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hearsay}
+      POSTGRES_DB: ${POSTGRES_DB:-hearsay}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hearsay}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  gpu:
+    build: ./gpu
+    env_file: .env
+    environment:
+      HEARSAY_GPU_HOST: 0.0.0.0
+      HEARSAY_GPU_PORT: "8001"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+      - torch-cache:/root/.cache/torch
+    # Requires the NVIDIA Container Toolkit on the host.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: ./api
+    env_file: .env
+    environment:
+      HEARSAY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-hearsay}:${POSTGRES_PASSWORD:-hearsay}@postgres:5432/${POSTGRES_DB:-hearsay}
+      HEARSAY_GPU_BASE_URL: http://gpu:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gpu:
+        condition: service_started
+    volumes:
+      - storage:/data/hearsay
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+
+volumes:
+  pgdata:
+  storage:
+  hf-cache:
+  torch-cache:
