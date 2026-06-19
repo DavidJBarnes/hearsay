@@ -5,6 +5,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-hearsay}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hearsay}
@@ -21,6 +22,7 @@ services:
 
   gpu:
     build: ./gpu
+    restart: unless-stopped
     env_file: .env
     environment:
       HEARSAY_GPU_HOST: 0.0.0.0
@@ -46,6 +48,7 @@ services:
 
   api:
     build: ./api
+    restart: unless-stopped
     env_file: .env
     environment:
       HEARSAY_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-hearsay}:${POSTGRES_PASSWORD:-hearsay}@postgres:5432/${POSTGRES_DB:-hearsay}
@@ -67,6 +70,7 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     depends_on:
       - api
     ports:
