@@ -10,6 +10,7 @@ export function SttPage() {
   const [error, setError] = useState<string | null>(null);
   const [diarize, setDiarize] = useState(false);
   const [liveText, setLiveText] = useState('');
+  const [listening, setListening] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   async function upload() {
@@ -30,9 +31,17 @@ export function SttPage() {
   }
 
   function onRealtime(msg: RealtimeMessage) {
-    if (msg.type === 'partial') setLiveText(msg.text);
-    else if (msg.type === 'final') setLiveText((prev) => `${prev}\n${msg.text}`.trim());
-    else if (msg.type === 'error') setError(msg.text);
+    if (msg.type === 'ready') {
+      setListening(true);
+      setError(null);
+    } else if (msg.type === 'partial') {
+      setLiveText(msg.text);
+    } else if (msg.type === 'final') {
+      setLiveText((prev) => `${prev}\n${msg.text}`.trim());
+    } else if (msg.type === 'error') {
+      setError(msg.text);
+      setListening(false);
+    }
   }
 
   return (
@@ -72,6 +81,11 @@ export function SttPage() {
       <div className="card">
         <h3>Live microphone</h3>
         <LiveMic onMessage={onRealtime} />
+        {listening && (
+          <p className="muted" role="status" data-testid="live-status">
+            ● connected — speak now
+          </p>
+        )}
         <pre className="live-text" data-testid="live-text">
           {liveText}
         </pre>

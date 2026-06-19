@@ -115,6 +115,8 @@ describe('realtime socket', () => {
       readyState = 1;
       binaryType = '';
       onmessage: ((ev: { data: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      onclose: ((ev: { code: number }) => void) | null = null;
       sent: ArrayBuffer[] = [];
       closed = false;
       constructor(public url: string) {
@@ -129,12 +131,24 @@ describe('realtime socket', () => {
     }
     vi.stubGlobal('WebSocket', FakeWS as unknown as typeof WebSocket);
 
-    const messages: unknown[] = [];
+    const messages: { type: string; text: string }[] = [];
     const socket = client.openRealtime((m) => messages.push(m), 'faster-whisper');
     const ws = instances[0];
     expect(ws.url).toContain('api_key=sk-ws');
     ws.onmessage?.({ data: JSON.stringify({ type: 'ready', text: '' }) });
     expect(messages[0]).toEqual({ type: 'ready', text: '' });
+
+    // Non-JSON frames are ignored, not thrown.
+    ws.onmessage?.({ data: 'not json' });
+    // A connection error and an abnormal close both surface as error messages.
+    ws.onerror?.();
+    expect(messages.at(-1)?.type).toBe('error');
+    ws.onclose?.({ code: 1006 });
+    expect(messages.at(-1)?.text).toContain('1006');
+    // A normal close is silent.
+    const before = messages.length;
+    ws.onclose?.({ code: 1000 });
+    expect(messages.length).toBe(before);
 
     socket.send(new ArrayBuffer(4));
     expect(ws.sent).toHaveLength(1);

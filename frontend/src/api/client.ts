@@ -144,7 +144,29 @@ export const client: HearsayClient = {
     )}&model=${encodeURIComponent(model)}`;
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
-    ws.onmessage = (ev) => onMessage(JSON.parse(ev.data) as RealtimeMessage);
+    ws.onmessage = (ev) => {
+      try {
+        onMessage(JSON.parse(ev.data) as RealtimeMessage);
+      } catch {
+        // Ignore non-JSON frames rather than throwing out of the handler.
+      }
+    };
+    // Surface connection failures instead of failing silently. The most common
+    // cause over a self-signed HTTPS cert is the browser rejecting the wss
+    // handshake until the certificate has been accepted for the site.
+    ws.onerror = () =>
+      onMessage({
+        type: 'error',
+        text:
+          'Realtime connection error. Over a self-signed HTTPS cert, open the ' +
+          'page and accept the certificate first, then retry.',
+      });
+    ws.onclose = (ev) => {
+      // 1000 = normal, 1005 = no status (normal stop). Anything else is a fault.
+      if (ev.code !== 1000 && ev.code !== 1005) {
+        onMessage({ type: 'error', text: `Realtime connection closed (code ${ev.code}).` });
+      }
+    };
     return {
       send(frame: ArrayBuffer) {
         if (ws.readyState === WebSocket.OPEN) ws.send(frame);

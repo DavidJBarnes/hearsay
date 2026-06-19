@@ -49,6 +49,12 @@ describe('SttPage', () => {
     expect(screen.getByText(/SPEAKER_00/)).toBeInTheDocument();
   });
 
+  it('shows a connected indicator when the stream is ready', async () => {
+    render(<SttPage />);
+    emit({ type: 'ready', text: '' });
+    await waitFor(() => expect(screen.getByTestId('live-status')).toBeInTheDocument());
+  });
+
   it('renders live partial then final transcripts', async () => {
     render(<SttPage />);
     emit({ type: 'partial', text: 'hello' });
