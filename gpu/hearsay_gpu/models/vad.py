@@ -43,7 +43,11 @@ class SileroVad(ModelWrapper):
         recording degrades detection on subsequent ones (speech can be missed
         entirely). No-op if the model hasn't been loaded yet.
         """
-        if self._loaded and self._model is not None and hasattr(self._model, "reset_states"):
+        if (
+            self._loaded
+            and self._model is not None
+            and hasattr(self._model, "reset_states")
+        ):
             self._model.reset_states()
 
     def speech_prob(
