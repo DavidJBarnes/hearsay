@@ -99,5 +99,8 @@ async def realtime(
         await queue.put(_EOF)
         try:
             await emitter
-        except Exception:  # noqa: BLE001 - emitter errors must not crash close
-            log.warning("realtime emitter ended with error")
+        except Exception as exc:  # noqa: BLE001 - emitter errors must not crash close
+            log.warning(
+                "realtime emitter ended with error",
+                extra={"extra": {"error": repr(exc)}},
+            )
