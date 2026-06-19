@@ -35,6 +35,17 @@ class SileroVad(ModelWrapper):
         self._model = model
         log.info("silero vad loaded")
 
+    def reset(self) -> None:
+        """Clear the model's recurrent state before a new audio stream.
+
+        Silero VAD is an RNN that carries hidden state between calls. Without a
+        reset at the start of each realtime session, stale state from a previous
+        recording degrades detection on subsequent ones (speech can be missed
+        entirely). No-op if the model hasn't been loaded yet.
+        """
+        if self._loaded and self._model is not None and hasattr(self._model, "reset_states"):
+            self._model.reset_states()
+
     def speech_prob(
         self, window_pcm16: bytes, sample_rate: int
     ) -> float:  # pragma: no cover

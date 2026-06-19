@@ -57,6 +57,8 @@ export interface HearsayClient {
 
 export interface RealtimeSocket {
   send(frame: ArrayBuffer): void;
+  /** Signal end-of-speech and close once the server flushes the final transcript. */
+  finish(): void;
   close(): void;
 }
 
@@ -170,6 +172,20 @@ export const client: HearsayClient = {
     return {
       send(frame: ArrayBuffer) {
         if (ws.readyState === WebSocket.OPEN) ws.send(frame);
+      },
+      finish() {
+        // Tell the server to finalize, then close after a grace period so the
+        // final transcript (produced on end-of-speech) is delivered first.
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send('eof');
+          } catch {
+            // socket already closing
+          }
+          setTimeout(() => ws.close(), 2000);
+        } else {
+          ws.close();
+        }
       },
       close() {
         ws.close();

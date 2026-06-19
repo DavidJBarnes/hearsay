@@ -33,6 +33,26 @@ def test_load_is_idempotent() -> None:
     assert model.is_loaded is True
 
 
+def test_vad_reset() -> None:
+    """VAD reset is a no-op until loaded, then clears recurrent state."""
+    from hearsay_gpu.models.vad import SileroVad
+
+    class FakeSilero:
+        def __init__(self) -> None:
+            self.resets = 0
+
+        def reset_states(self) -> None:
+            self.resets += 1
+
+    vad = SileroVad()
+    vad.reset()  # not loaded yet -> no-op, no error
+    fake = FakeSilero()
+    vad._model = fake
+    vad._loaded = True
+    vad.reset()
+    assert fake.resets == 1
+
+
 def test_segment_as_dict() -> None:
     """Segment serialization omits speaker when unset."""
     assert Segment(0.0, 1.0, "hi").as_dict() == {"start": 0.0, "end": 1.0, "text": "hi"}

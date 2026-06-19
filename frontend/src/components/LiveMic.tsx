@@ -50,9 +50,12 @@ export function LiveMic({ onMessage }: Props) {
   }
 
   function stop() {
-    socketRef.current?.close();
+    // Halt audio capture first, then flush: `finish()` signals end-of-speech and
+    // keeps the socket open briefly so the final transcript is delivered before
+    // the connection closes.
     streamRef.current?.getTracks().forEach((t) => t.stop());
     void ctxRef.current?.close();
+    socketRef.current?.finish();
     socketRef.current = null;
     streamRef.current = null;
     ctxRef.current = null;

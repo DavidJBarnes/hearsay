@@ -178,6 +178,10 @@ async def _run_realtime(websocket: WebSocket, manager: ModelManager) -> None:
     settings = manager.settings
     language: str | None = None
 
+    # Clear any recurrent VAD state left over from a previous session so back-
+    # to-back recordings detect speech reliably.
+    manager.vad.reset()
+
     def _transcribe(pcm: bytes) -> str:
         return manager.get_stt("faster-whisper").transcribe(pcm, language=language).text
 

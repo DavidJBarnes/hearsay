@@ -165,13 +165,49 @@ describe('realtime socket', () => {
       binaryType = '';
       onmessage = null;
       send = vi.fn();
-      close() {}
+      close = vi.fn();
       constructor(public url: string) {}
     }
     vi.stubGlobal('WebSocket', ClosedWS as unknown as typeof WebSocket);
     const socket = client.openRealtime(() => {});
     socket.send(new ArrayBuffer(2));
+    socket.finish(); // not open -> closes immediately
     vi.unstubAllGlobals();
     expect(true).toBe(true);
+  });
+
+  it('finish() sends eof then closes after a grace period', () => {
+    vi.useFakeTimers();
+    setApiKey('sk');
+    const instances: { sent: unknown[]; closed: boolean }[] = [];
+    class FakeWS {
+      static OPEN = 1;
+      readyState = 1;
+      binaryType = '';
+      onmessage = null;
+      onerror = null;
+      onclose = null;
+      sent: unknown[] = [];
+      closed = false;
+      constructor(public url: string) {
+        instances.push(this);
+      }
+      send(d: unknown) {
+        this.sent.push(d);
+      }
+      close() {
+        this.closed = true;
+      }
+    }
+    vi.stubGlobal('WebSocket', FakeWS as unknown as typeof WebSocket);
+    const socket = client.openRealtime(() => {});
+    const ws = instances[0];
+    socket.finish();
+    expect(ws.sent).toContain('eof');
+    expect(ws.closed).toBe(false);
+    vi.advanceTimersByTime(2000);
+    expect(ws.closed).toBe(true);
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 });

@@ -65,6 +65,12 @@ class FakeStt(SttModel):
 class FakeVad:
     """A VAD stub: speech when any sample is non-zero."""
 
+    def __init__(self) -> None:
+        self.resets = 0
+
+    def reset(self) -> None:
+        self.resets += 1
+
     def speech_prob(self, window_pcm16: bytes, sample_rate: int) -> float:
         return 1.0 if any(window_pcm16) else 0.0
 

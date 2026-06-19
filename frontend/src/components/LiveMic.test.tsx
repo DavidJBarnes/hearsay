@@ -16,7 +16,7 @@ interface FakeProcessor {
 }
 
 function installAudioMocks() {
-  const socket = { send: vi.fn(), close: vi.fn() };
+  const socket = { send: vi.fn(), finish: vi.fn(), close: vi.fn() };
   openRealtime.mockReturnValue(socket);
   const track = { stop: vi.fn() };
   const stream = { getTracks: () => [track] };
@@ -54,7 +54,7 @@ describe('LiveMic', () => {
     expect(socket.send).toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole('button', { name: /Stop recording/ }));
-    expect(socket.close).toHaveBeenCalled();
+    expect(socket.finish).toHaveBeenCalled(); // graceful flush, not a hard close
     expect(track.stop).toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
