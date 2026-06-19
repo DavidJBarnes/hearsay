@@ -6,9 +6,11 @@ mirror the :class:`LocalEngineClient` contract used by the API gateway.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
@@ -19,11 +21,26 @@ from pydantic import BaseModel
 from hearsay_gpu.config import get_gpu_settings
 from hearsay_gpu.logging import configure_logging, get_logger
 from hearsay_gpu.manager import ModelManager
-from hearsay_gpu.realtime import RealtimeSession
+from hearsay_gpu.realtime import RealtimeEvent, RealtimeSession
 
 log = get_logger(__name__)
 
 _manager: ModelManager | None = None
+
+# Single shared worker for realtime inference. One worker serializes access to
+# the (non-thread-safe) whisper/VAD models while keeping inference off the
+# asyncio event loop so WebSocket I/O stays responsive across sessions.
+_INFER_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gpu-infer")
+
+
+def _collect_feed(session: RealtimeSession, data: bytes) -> list[RealtimeEvent]:
+    """Feed a PCM chunk to the session (runs in the inference worker)."""
+    return list(session.feed(data))
+
+
+def _collect_flush(session: RealtimeSession) -> list[RealtimeEvent]:
+    """Finalize any in-progress utterance (runs in the inference worker)."""
+    return list(session.flush())
 
 
 def set_manager(manager: ModelManager) -> None:
@@ -193,21 +210,28 @@ async def _run_realtime(websocket: WebSocket, manager: ModelManager) -> None:
         speech_prob=_speech_prob,
         sample_rate=settings.sample_rate,
     )
+    loop = asyncio.get_running_loop()
 
-    async def _send(
-        event_type: str, text: str, start: float, end: float, eof: bool
-    ) -> None:
+    async def _send(ev: RealtimeEvent, eof: bool) -> None:
         await websocket.send_text(
             json.dumps(
                 {
-                    "type": event_type,
-                    "text": text,
-                    "start": start,
-                    "end": end,
+                    "type": ev.type,
+                    "text": ev.text,
+                    "start": ev.start,
+                    "end": ev.end,
                     "eof": eof,
                 }
             )
         )
+
+    async def _feed(data: bytes) -> None:
+        # Run blocking VAD + whisper off the event loop (single shared worker
+        # serializes model access) so WebSocket I/O and keepalives stay
+        # responsive while inference runs.
+        events = await loop.run_in_executor(_INFER_POOL, _collect_feed, session, data)
+        for ev in events:
+            await _send(ev, False)
 
     try:
         while True:
@@ -215,8 +239,7 @@ async def _run_realtime(websocket: WebSocket, manager: ModelManager) -> None:
             if message.get("type") == "websocket.disconnect":
                 break
             if (data := message.get("bytes")) is not None:
-                for ev in session.feed(data):
-                    await _send(ev.type, ev.text, ev.start, ev.end, False)
+                await _feed(data)
             elif (text := message.get("text")) is not None:
                 payload = json.loads(text)
                 if payload.get("type") == "config":
@@ -225,8 +248,9 @@ async def _run_realtime(websocket: WebSocket, manager: ModelManager) -> None:
                     break
     except WebSocketDisconnect:  # pragma: no cover - network-dependent
         return
-    for ev in session.flush():
-        await _send(ev.type, ev.text, ev.start, ev.end, True)
+    final_events = await loop.run_in_executor(_INFER_POOL, _collect_flush, session)
+    for ev in final_events:
+        await _send(ev, True)
 
 
 app = create_app()

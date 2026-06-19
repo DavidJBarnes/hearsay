@@ -151,6 +151,8 @@ async def _ws_transcribe(
     ws_url: str, frames: AsyncIterator[bytes], language: str | None
 ) -> AsyncIterator[dict[str, Any]]:
     """Open a WS to the daemon, pump frames, and yield JSON transcript events."""
+    import asyncio
+    import contextlib
     import json as _json
 
     import websockets
@@ -163,8 +165,6 @@ async def _ws_transcribe(
                 await ws.send(frame)
             await ws.send(_json.dumps({"type": "eof"}))
 
-        import asyncio
-
         pump_task = asyncio.create_task(_pump())
         try:
             async for message in ws:
@@ -173,4 +173,8 @@ async def _ws_transcribe(
                 if event.get("type") == "final" and event.get("eof"):
                     break
         finally:
+            # Cancel and await the pump so the task and its frame iterator are
+            # fully torn down each session (otherwise they leak across sessions).
             pump_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await pump_task
