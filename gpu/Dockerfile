@@ -25,7 +25,14 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY pyproject.toml ./
-RUN python3.12 -m pip install --upgrade pip && python3.12 -m pip install .
+# setuptools >=81 dropped the bundled pkg_resources, so `import pkg_resources`
+# falls through to the old Ubuntu system copy, which calls pkgutil.ImpImporter
+# (removed in Python 3.12) and crashes. Chatterbox's `perth` dependency imports
+# pkg_resources, so pin setuptools <81 (after the main install, in case a dep
+# pulls it forward) to keep a working copy ahead of the system one on sys.path.
+RUN python3.12 -m pip install --upgrade pip \
+    && python3.12 -m pip install . \
+    && python3.12 -m pip install "setuptools<81"
 
 COPY hearsay_gpu ./hearsay_gpu
 
