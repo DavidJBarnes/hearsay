@@ -13,10 +13,37 @@ from typing import Any
 
 import httpx
 
-from hearsay_api.engines.base import Engine, SynthesisResult, TranscriptionResult
+from hearsay_api.engines.base import (
+    Engine,
+    EngineError,
+    SynthesisResult,
+    TranscriptionResult,
+)
 from hearsay_api.logging import get_logger
 
 log = get_logger(__name__)
+
+
+def _upstream_detail(response: httpx.Response) -> str:
+    """Extract the daemon's error ``detail`` from a failed response body."""
+    fallback = response.text or response.reason_phrase
+    try:
+        body = response.json()
+    except ValueError:
+        return fallback
+    if isinstance(body, dict) and body.get("detail"):
+        return str(body["detail"])
+    return fallback
+
+
+def _engine_error(name: str, exc: httpx.HTTPError) -> EngineError:
+    """Convert an httpx failure into an :class:`EngineError` for the gateway."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        detail = _upstream_detail(exc.response)
+        # Forward client errors verbatim; report upstream 5xx as a bad gateway.
+        status = exc.response.status_code if exc.response.status_code < 500 else 502
+        return EngineError(status, f"engine '{name}': {detail}")
+    return EngineError(502, f"engine '{name}' unreachable: {exc}")
 
 
 class LocalEngineClient(Engine):
@@ -44,8 +71,11 @@ class LocalEngineClient(Engine):
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         """POST JSON to the daemon and return the decoded JSON response."""
-        resp = await self._client.post(f"{self.base_url}{path}", json=payload)
-        resp.raise_for_status()
+        try:
+            resp = await self._client.post(f"{self.base_url}{path}", json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise _engine_error(self.name, exc) from exc
         data: dict[str, Any] = resp.json()
         return data
 
@@ -124,12 +154,17 @@ class LocalEngineClient(Engine):
         }
         if reference_audio is not None:
             payload["reference_audio_b64"] = base64.b64encode(reference_audio).decode("ascii")
-        async with self._client.stream(
-            "POST", f"{self.base_url}/synthesize_stream", json=payload
-        ) as resp:
-            resp.raise_for_status()
-            async for chunk in resp.aiter_bytes():
-                yield chunk
+        try:
+            async with self._client.stream(
+                "POST", f"{self.base_url}/synthesize_stream", json=payload
+            ) as resp:
+                if resp.is_error:
+                    await resp.aread()
+                    resp.raise_for_status()
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+        except httpx.HTTPError as exc:
+            raise _engine_error(self.name, exc) from exc
 
     async def clone_voice(self, reference_audio: bytes, *, name: str) -> dict[str, Any]:
         """Forward a voice-cloning request to the daemon."""

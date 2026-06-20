@@ -7,6 +7,9 @@ import wave
 
 from httpx import AsyncClient
 
+from hearsay_api.engines.base import EngineError, EngineRegistry
+from tests.conftest import FakeEngine
+
 
 def _wav_bytes(seconds: float = 0.1) -> bytes:
     """Return a small valid WAV buffer of silence."""
@@ -38,6 +41,21 @@ async def test_speech_streaming(app_client: AsyncClient) -> None:
     )
     assert resp.status_code == 200
     assert resp.content == b"frame1frame2"
+
+
+async def test_speech_engine_error_surfaces_detail(
+    app_client: AsyncClient, registry: EngineRegistry
+) -> None:
+    """An engine failure returns its upstream status and real cause, not a 500."""
+
+    class BoomEngine(FakeEngine):
+        async def synthesize(self, *args: object, **kwargs: object) -> object:
+            raise EngineError(502, "engine 'kokoro': RuntimeError: chatterbox exploded")
+
+    registry.register(BoomEngine("kokoro", supports_tts=True))
+    resp = await app_client.post("/v1/audio/speech", json={"model": "kokoro", "input": "hi"})
+    assert resp.status_code == 502
+    assert "chatterbox exploded" in resp.json()["detail"]
 
 
 async def test_speech_unknown_model(app_client: AsyncClient) -> None:

@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from hearsay_api.config import EnginePlacement, Settings
+from hearsay_api.engines.base import EngineError
 from hearsay_api.engines.local_client import LocalEngineClient, _ws_transcribe
 from hearsay_api.engines.local_client import LocalEngineClient as _LC
 from hearsay_api.engines.placement import (
@@ -141,6 +142,100 @@ async def test_local_clone_voice() -> None:
     )
     meta = await client.clone_voice(b"ref", name="bob")
     assert meta["ok"] is True
+
+
+# --- Error translation -------------------------------------------------------
+
+
+async def test_post_upstream_5xx_carries_detail() -> None:
+    """A daemon 5xx becomes a 502 EngineError carrying the real detail."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"detail": "synthesize failed: RuntimeError: boom"})
+
+    client = LocalEngineClient(
+        "chatterbox", base_url="http://gpu", timeout_s=5, client=_mock_client(handler)
+    )
+    with pytest.raises(EngineError) as ei:
+        await client.synthesize("hi", voice="v")
+    assert ei.value.status_code == 502
+    assert "RuntimeError: boom" in ei.value.detail
+    assert "chatterbox" in ei.value.detail
+
+
+async def test_post_upstream_4xx_is_forwarded() -> None:
+    """A daemon 4xx is forwarded verbatim (client error, not bad gateway)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"detail": "unknown tts engine: x"})
+
+    client = LocalEngineClient(
+        "chatterbox", base_url="http://gpu", timeout_s=5, client=_mock_client(handler)
+    )
+    with pytest.raises(EngineError) as ei:
+        await client.clone_voice(b"ref", name="bob")
+    assert ei.value.status_code == 400
+    assert "unknown tts engine" in ei.value.detail
+
+
+async def test_post_non_json_body_falls_back_to_reason() -> None:
+    """An empty/non-JSON error body falls back to the HTTP reason phrase."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = LocalEngineClient(
+        "chatterbox", base_url="http://gpu", timeout_s=5, client=_mock_client(handler)
+    )
+    with pytest.raises(EngineError) as ei:
+        await client.synthesize("hi", voice="v")
+    assert ei.value.status_code == 502
+    assert "Internal Server Error" in ei.value.detail
+
+
+async def test_post_json_without_detail_falls_back_to_body() -> None:
+    """A JSON error body lacking ``detail`` falls back to the raw body text."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "nope"})
+
+    client = LocalEngineClient(
+        "chatterbox", base_url="http://gpu", timeout_s=5, client=_mock_client(handler)
+    )
+    with pytest.raises(EngineError) as ei:
+        await client.synthesize("hi", voice="v")
+    assert "nope" in ei.value.detail
+
+
+async def test_post_unreachable_daemon() -> None:
+    """A transport error (daemon down) becomes a 502 'unreachable' EngineError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    client = LocalEngineClient(
+        "chatterbox", base_url="http://gpu", timeout_s=5, client=_mock_client(handler)
+    )
+    with pytest.raises(EngineError) as ei:
+        await client.synthesize("hi", voice="v")
+    assert ei.value.status_code == 502
+    assert "unreachable" in ei.value.detail
+
+
+async def test_stream_upstream_error_carries_detail() -> None:
+    """A daemon error on the streaming path surfaces as an EngineError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"detail": "synthesize_stream failed: boom"})
+
+    client = LocalEngineClient(
+        "chatterbox", base_url="http://gpu", timeout_s=5, client=_mock_client(handler)
+    )
+    with pytest.raises(EngineError) as ei:
+        async for _ in client.synthesize_stream("hi", voice="v"):
+            pass
+    assert ei.value.status_code == 502
+    assert "boom" in ei.value.detail
 
 
 # --- WebSocket streaming -----------------------------------------------------

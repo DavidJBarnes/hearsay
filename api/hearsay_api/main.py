@@ -12,11 +12,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 
 from hearsay_api.app_state import AppContext, set_context
 from hearsay_api.auth import ensure_bootstrap_key
 from hearsay_api.config import Settings, get_settings
 from hearsay_api.db import get_sessionmaker
+from hearsay_api.engines.base import EngineError
 from hearsay_api.engines.placement import build_registry
 from hearsay_api.logging import configure_logging, get_logger
 from hearsay_api.metrics import REQUEST_LATENCY
@@ -67,6 +69,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(title="Hearsay", version="1.0.0", lifespan=lifespan)
+
+    @app.exception_handler(EngineError)
+    async def _engine_error_handler(request: Request, exc: EngineError) -> JSONResponse:
+        """Return an engine failure with its real cause and upstream status."""
+        log.warning("engine call failed", extra={"extra": {"detail": exc.detail}})
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     @app.middleware("http")
     async def _latency_middleware(request: Request, call_next: object) -> Response:

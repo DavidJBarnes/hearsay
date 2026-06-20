@@ -9,12 +9,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -41,6 +41,29 @@ def _collect_feed(session: RealtimeSession, data: bytes) -> list[RealtimeEvent]:
 def _collect_flush(session: RealtimeSession) -> list[RealtimeEvent]:
     """Finalize any in-progress utterance (runs in the inference worker)."""
     return list(session.flush())
+
+
+@contextmanager
+def _model_errors(op: str) -> Iterator[None]:
+    """Translate model failures into HTTP errors that carry the real cause.
+
+    Without this, an exception raised while loading or running a model (e.g.
+    Chatterbox failing to load weights or generate audio) surfaces as an opaque
+    ``500 Internal Server Error`` with no detail, both here and at the API
+    gateway. We log the full traceback and return the concrete error message so
+    the failure is diagnosable from the client.
+    """
+    try:
+        yield
+    except KeyError as exc:  # unknown engine / capability not supported
+        raise HTTPException(status_code=400, detail=str(exc).strip("'\"")) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("gpu %s failed", op)
+        raise HTTPException(
+            status_code=500, detail=f"{op} failed: {type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def set_manager(manager: ModelManager) -> None:
@@ -118,9 +141,13 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         """Transcribe a base64 PCM buffer."""
         pcm = base64.b64decode(body.audio_b64)
-        return manager.transcribe(
-            engine=body.engine, pcm16k=pcm, language=body.language, diarize=body.diarize
-        )
+        with _model_errors("transcribe"):
+            return manager.transcribe(
+                engine=body.engine,
+                pcm16k=pcm,
+                language=body.language,
+                diarize=body.diarize,
+            )
 
     @app.post("/synthesize")
     async def synthesize(
@@ -132,14 +159,15 @@ def create_app() -> FastAPI:
             if body.reference_audio_b64
             else None
         )
-        result = manager.synthesize(
-            engine=body.engine,
-            text=body.text,
-            voice=body.voice,
-            speed=body.speed,
-            response_format=body.response_format,
-            reference_pcm=reference,
-        )
+        with _model_errors("synthesize"):
+            result = manager.synthesize(
+                engine=body.engine,
+                text=body.text,
+                voice=body.voice,
+                speed=body.speed,
+                response_format=body.response_format,
+                reference_pcm=reference,
+            )
         return {
             "audio_b64": base64.b64encode(result["audio"]).decode("ascii"),
             "format": result["format"],
@@ -158,14 +186,23 @@ def create_app() -> FastAPI:
             else None
         )
 
-        async def _frames() -> AsyncIterator[bytes]:
-            for frame in manager.synthesize_stream(
+        # Prime the first frame eagerly so model load / first-chunk failures
+        # surface as a clean error response instead of an aborted mid-stream
+        # body (headers are flushed once streaming starts).
+        with _model_errors("synthesize_stream"):
+            frames = manager.synthesize_stream(
                 engine=body.engine,
                 text=body.text,
                 voice=body.voice,
                 speed=body.speed,
                 reference_pcm=reference,
-            ):
+            )
+            first = next(frames, None)
+
+        async def _frames() -> AsyncIterator[bytes]:
+            if first is not None:
+                yield first
+            for frame in frames:
                 yield frame
 
         return StreamingResponse(_frames(), media_type="audio/L16")
@@ -176,9 +213,10 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         """Produce cloning metadata for a reference sample."""
         reference = base64.b64decode(body.reference_audio_b64)
-        return manager.clone_voice(
-            engine=body.engine, name=body.name, reference_pcm=reference
-        )
+        with _model_errors("clone_voice"):
+            return manager.clone_voice(
+                engine=body.engine, name=body.name, reference_pcm=reference
+            )
 
     @app.websocket("/transcribe_stream")
     async def transcribe_stream(websocket: WebSocket) -> None:

@@ -14,6 +14,21 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+class EngineError(Exception):
+    """An engine call failed; carries an HTTP status and a client-safe detail.
+
+    Lets the local/runpod clients translate upstream failures (a 5xx from the
+    GPU daemon, an unreachable daemon) into a response that preserves the real
+    cause instead of collapsing to an opaque ``500 Internal Server Error``.
+    """
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        """Store the HTTP status to return and the detail message."""
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
 @dataclass(slots=True)
 class TranscriptionResult:
     """Result of a (non-streaming) transcription."""

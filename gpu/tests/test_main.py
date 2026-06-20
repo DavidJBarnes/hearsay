@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
 from hearsay_gpu import main
 from hearsay_gpu.manager import ModelManager
+from hearsay_gpu.models.base import TtsChunk, TtsModel
 
 
 @pytest.fixture
@@ -95,6 +97,76 @@ def test_clone_endpoint(client: TestClient) -> None:
         json={"engine": "chatterbox", "name": "bob", "reference_audio_b64": ref},
     )
     assert resp.json()["name"] == "bob"
+
+
+class FailingTts(TtsModel):
+    """A TTS model that raises when synthesis runs (e.g. a load failure)."""
+
+    name = "chatterbox"
+
+    def _do_load(self) -> None:
+        self._loaded = True
+
+    def synthesize(
+        self, text: str, *, voice: str, speed: float, reference_pcm: bytes | None
+    ) -> Iterator[TtsChunk]:
+        self.load()
+        raise RuntimeError("weights missing")
+        yield  # pragma: no cover - unreachable, makes this a generator
+
+
+@pytest.fixture
+def failing_client(settings: object) -> TestClient:
+    """A TestClient whose chatterbox engine fails during synthesis."""
+    manager = ModelManager(
+        settings,  # type: ignore[arg-type]
+        tts_models={"chatterbox": FailingTts()},
+        stt_models={},
+        diarizer=object(),  # type: ignore[arg-type]
+        vad=object(),  # type: ignore[arg-type]
+    )
+    main.set_manager(manager)
+    return TestClient(main.create_app())
+
+
+def test_synthesize_model_failure_surfaces_detail(failing_client: TestClient) -> None:
+    """A model failure returns 500 with the real cause, not an opaque error."""
+    resp = failing_client.post(
+        "/synthesize", json={"engine": "chatterbox", "text": "hi"}
+    )
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert "synthesize failed" in detail
+    assert "RuntimeError: weights missing" in detail
+
+
+def test_synthesize_stream_model_failure_surfaces_detail(
+    failing_client: TestClient,
+) -> None:
+    """Streaming primes the first frame so load failures return a clean error."""
+    resp = failing_client.post(
+        "/synthesize_stream", json={"engine": "chatterbox", "text": "hi"}
+    )
+    assert resp.status_code == 500
+    assert "RuntimeError: weights missing" in resp.json()["detail"]
+
+
+def test_synthesize_unknown_engine_is_400(client: TestClient) -> None:
+    """An unknown engine name maps a KeyError to a 400 with detail."""
+    resp = client.post("/synthesize", json={"engine": "nope", "text": "hi"})
+    assert resp.status_code == 400
+    assert "unknown tts engine: nope" in resp.json()["detail"]
+
+
+def test_clone_unsupported_engine_is_400(client: TestClient) -> None:
+    """Cloning on an engine without embedding support returns 400."""
+    ref = base64.b64encode(b"ref").decode()
+    resp = client.post(
+        "/clone_voice",
+        json={"engine": "kokoro", "name": "x", "reference_audio_b64": ref},
+    )
+    assert resp.status_code == 400
+    assert "does not support cloning" in resp.json()["detail"]
 
 
 def test_transcribe_stream_websocket(client: TestClient) -> None:
